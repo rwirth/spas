@@ -148,7 +148,7 @@ class rev8 : Program {
 
     void Main(string argument) {
         // toggle maintenance mode
-        if (argument.Contains("maintenance")) {
+        if (Configuration.Features.MaintenanceMode.Enabled && argument.Contains("maintenance")) {
             if (Me.CustomName.EndsWith(Configuration.Features.MaintenanceMode.MaintenanceSuffix)) {
                 Me.SetCustomName(Me.CustomName.Substring(0, Me.CustomName.Length - Configuration.Features.MaintenanceMode.MaintenanceSuffix.Length));
                 Echo("This programmable block is no longer in maintenance mode.");
@@ -332,13 +332,13 @@ class rev8 : Program {
                 if (rotor == null) {
                     string message = " InitializeRotors(): failed to find rotor with name \"" + Configuration.RotorNames[i] + "\"";
                     if (Configuration.RotorNames[i].Contains(",")) {
-                        message += "\nDid you want to write\n\nRotorNames = { [...]\"";
+                        message += "\n\nDid you want to write\nRotorNames = { [...]\"";
                         string[] split = Configuration.RotorNames[i].Split(',');
                         for (int k = 0; k < split.Length; k++) {
                             message += split[k];
                             if (k < split.Length - 1) message += "\", \"";
                         }
-                        message += "\"\n\ninstead?";
+                        message += "\" [...] };\ninstead?";
                     }
                     throw new Exception(message);
                 }

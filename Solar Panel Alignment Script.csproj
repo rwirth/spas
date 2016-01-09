@@ -7,7 +7,7 @@
     <ProjectGuid>{16C62EC8-1326-492C-9C51-56308170BB99}</ProjectGuid>
     <OutputType>Exe</OutputType>
     <AppDesignerFolder>Properties</AppDesignerFolder>
-    <RootNamespace>Space_Engineers___Solar_Panel_Alignment_Script</RootNamespace>
+    <RootNamespace>spas</RootNamespace>
     <AssemblyName>Space Engineers - Solar Panel Alignment Script</AssemblyName>
     <TargetFrameworkVersion>v4.5</TargetFrameworkVersion>
     <FileAlignment>512</FileAlignment>

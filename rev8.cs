@@ -10,9 +10,9 @@ class rev8 : Program {
     // =================================[ START OF CONFIGURATION ]================================= 
     static class Configuration {
         // Target average maximum power output to reach (in kW)
-        // Default (Vanilla): 119 for large ship/station, 29 for small ship 
-        // Allowed values: 0 - 999999999 
-        public const int TargetPowerOutput = 119;
+        // Default (Vanilla): 119.5f for large ship/station, 29.5f for small ship
+        // Allowed values: 0f - 999999999f
+        public const float TargetAveragePowerOutput = 119.5f;
 
         // Delay between executions while aligning (in seconds)
         // Default: 2.0f 
@@ -23,6 +23,21 @@ class rev8 : Program {
         // Default: 10.0f 
         // Recommended values: 2.5f - 10.0f 
         public const float IdleDelay = 10.0f;
+
+        // Delay between executions while aligning in hibernation mode (in seconds)
+        // Default: 1.5f
+        // Recommended values: 1.5f - 5f;
+        public const float HibernationWorkDelay = 1.5f;
+
+        // Delay between executions while idling in hibernation mode (in seconds)
+        // Default: 10.0f
+        // Recommended values: 2.5f - 10.0f
+        public const float HibernationIdleDelay = 10.0f;
+
+        // Maximum deviation when comparing angles (in degrees)
+        // Default: 1.0f;
+        // Recommended values: 0.0001f - 1.0f
+        public const float MaxAngleDeviation = 1.0f;
 
         // Speed of all rotors that are used to align the solar panels (in RPM)
         // Lower values mean higher accuracy but also higher alignment time. 
@@ -116,23 +131,20 @@ class rev8 : Program {
             // Text that is located before the current power output value in the detailed description of the solar panel, including whitespaces. 
             // English: "Current Output: " 
             public const string CurrentOutput = "Current Output: ";
-
-            // Text that is located before the current angle value in the detailed description of the rotor/advanced rotor, including whitespaces.
-            // English: "Current angle: "
-            public const string CurrentAngle = "Current angle: ";
         }
     }
     // =================================[ END OF CONFIGURATION ]================================= 
 
-    static class Status { public const int HIBERNATING = 0, UPDATING = 1, TESTING = 2, ALIGNING = 3; }
+    static class Status { public const int HIBERNATING = -1, IDLING = 0, UPDATING = 1, TESTING = 2, ALIGNING = 3; }
 
     int CurrentStatus {
         get { return currentStatus; }
         set {
             if (value == Status.HIBERNATING) Echo("Hibernating...");
-            if (value == Status.UPDATING) Echo("Updating...");
-            if (value == Status.TESTING) Echo("Testing...");
-            if (value == Status.ALIGNING) Echo("Aligning...");
+            else if (value == Status.IDLING) Echo("Idling...");
+            else if (value == Status.UPDATING) Echo("Updating...");
+            else if (value == Status.TESTING) Echo("Testing...");
+            else if (value == Status.ALIGNING) Echo("Aligning...");
             currentStatus = value;
         }
     }
@@ -148,7 +160,7 @@ class rev8 : Program {
 
     void Main(string argument) {
         // toggle maintenance mode
-        if (Configuration.Features.MaintenanceMode.Enabled && argument.Contains("maintenance")) {
+        if (Configuration.Features.MaintenanceMode.Enabled && (argument + " ").Contains("maintenance ")) {
             if (Me.CustomName.EndsWith(Configuration.Features.MaintenanceMode.MaintenanceSuffix)) {
                 Me.SetCustomName(Me.CustomName.Substring(0, Me.CustomName.Length - Configuration.Features.MaintenanceMode.MaintenanceSuffix.Length));
                 Echo("This programmable block is no longer in maintenance mode.");
@@ -181,7 +193,7 @@ class rev8 : Program {
 
         // get current power output 
         if (!Utilities.AverageMaxOutput(solarPanels, out currentPower)) throw new Exception(" Main(): failed to read average maximum power from solar panels\n\nDid you configure this script correctly?");
-        if (currentPower == float.NaN) throw new Exception(" Main(): failed to read average maximum power from solar panels - power output too high (> 1 TW)");
+        if (currentPower == float.NaN) throw new Exception(" Main(): failed to read average maximum power from solar panels - power output too high (>= 1 PW)");
 
         Echo("current average output: " + currentPower + " kW");
 
@@ -195,16 +207,16 @@ class rev8 : Program {
         }
 
         // check if the target output has been reached 
-        if (currentPower >= Configuration.TargetPowerOutput) {
-            Hibernate();
+        if (currentPower >= Configuration.TargetAveragePowerOutput) {
+            Idle();
             return;
         }
 
         // update the rotor and check which direction yields the higher power output 
-        if (CurrentStatus == Status.UPDATING || CurrentStatus == Status.HIBERNATING) {
+        if (CurrentStatus == Status.UPDATING || CurrentStatus == Status.IDLING || CurrentStatus == Status.HIBERNATING) {
             currentRotors = rotors[currentRotorIndex];
             UpdateNames();
-            Utilities.SetSpeed(currentRotors, GetAppropriateSpeed());
+            Utilities.SetSpeed(currentRotors, GetRotorSpeed());
             Utilities.ToggleOn(currentRotors);
             CurrentStatus = Status.TESTING;
             Utilities.Trigger(timer, Configuration.WorkDelay);
@@ -213,14 +225,14 @@ class rev8 : Program {
 
         // set the rotation direction towards the higher power output 
         if (CurrentStatus == Status.TESTING) {
-            Utilities.SetSpeed(currentRotors, GetAppropriateSpeed());
+            Utilities.SetSpeed(currentRotors, GetRotorSpeed());
             Utilities.ToggleOff(currentRotors);
 
             float oldPower;
             UpdateNames(out oldPower);
             if (currentPower < oldPower) {
                 currentDirection = -currentDirection;
-                Utilities.SetSpeed(currentRotors, GetAppropriateSpeed());
+                Utilities.SetSpeed(currentRotors, GetRotorSpeed());
             }
 
             CurrentStatus = Status.ALIGNING;
@@ -228,7 +240,7 @@ class rev8 : Program {
 
         // rotate towards the local maximum output 
         if (CurrentStatus == Status.ALIGNING) {
-            Utilities.SetSpeed(currentRotors, GetAppropriateSpeed());
+            Utilities.SetSpeed(currentRotors, GetRotorSpeed());
             Utilities.ToggleOn(currentRotors);
 
             float oldPower;
@@ -240,7 +252,7 @@ class rev8 : Program {
                     currentRotorIndex = (currentRotorIndex + 1) % rotors.Count;
                 } else {
                     currentDirection = -currentDirection;
-                    Utilities.SetSpeed(currentRotors, GetAppropriateSpeed());
+                    Utilities.SetSpeed(currentRotors, GetRotorSpeed());
                 }
             }
 
@@ -254,44 +266,52 @@ class rev8 : Program {
         if (solarPanels.Count > 0 && !forced) return;
 
         if (Configuration.SolarPanelName_IsGroup) {
-            // get a list of all block groups 
-            List<IMyBlockGroup> groups = new List<IMyBlockGroup>();
-            GridTerminalSystem.GetBlockGroups(groups);
-
-            // search all block groups for one that has the provided name as its own 
-            for (int i = 0; i < groups.Count; i++) {
-                IMyBlockGroup group = groups[i];
-                if (group.Name.Equals(Configuration.SolarPanelName)) {
-                    // add all solar panels in that group 
-                    for (int j = 0; j < group.Blocks.Count; j++) {
-                        IMySolarPanel solarPanel = group.Blocks[j] as IMySolarPanel;
-                        if (solarPanel != null) {
-                            solarPanels.Add(solarPanel);
-                        }
-                    }
-                    break;
-                }
-            }
-
-            if (solarPanels.Count <= 0) throw new Exception(" InitializeSolarPanels(): failed to find any solar panels in the group \"" + Configuration.SolarPanelName + "\"");
+            InitializeSolarPanelGroup();
         } else {
-            // get a list of all solar panels 
-            List<IMyTerminalBlock> panels = new List<IMyTerminalBlock>();
-            GridTerminalSystem.GetBlocksOfType<IMySolarPanel>(panels);
-
-            // search all solar panels for one which starts with the provided name 
-            for (int i = 0; i < panels.Count; i++) {
-                IMySolarPanel solarPanel = panels[i] as IMySolarPanel;
-                if (solarPanel != null && solarPanel.CustomName.StartsWith(Configuration.SolarPanelName)) {
-                    solarPanels.Add(solarPanel);
-                    break;
-                }
-            }
-
-            if (solarPanels.Count <= 0) throw new Exception(" InitializeSolarPanels(): failed to find solar panel with name \"" + Configuration.SolarPanelName + "\"");
+            InitializeSolarPanel();
         }
 
         Echo("initialized solar panels");
+    }
+
+    void InitializeSolarPanelGroup() {
+        // get a list of all block groups 
+        List<IMyBlockGroup> groups = new List<IMyBlockGroup>();
+        GridTerminalSystem.GetBlockGroups(groups);
+
+        // search all block groups for one that has the provided name as its own 
+        for (int i = 0; i < groups.Count; i++) {
+            IMyBlockGroup group = groups[i];
+            if (group.Name.Equals(Configuration.SolarPanelName)) {
+                // add all solar panels in that group 
+                for (int j = 0; j < group.Blocks.Count; j++) {
+                    IMySolarPanel solarPanel = group.Blocks[j] as IMySolarPanel;
+                    if (solarPanel != null) {
+                        solarPanels.Add(solarPanel);
+                    }
+                }
+                break;
+            }
+        }
+
+        if (solarPanels.Count <= 0) throw new Exception(" InitializeSolarPanelGroup(): failed to find any solar panels in the group \"" + Configuration.SolarPanelName + "\"");
+    }
+
+    void InitializeSolarPanel() {
+        // get a list of all solar panels 
+        List<IMyTerminalBlock> panels = new List<IMyTerminalBlock>();
+        GridTerminalSystem.GetBlocksOfType<IMySolarPanel>(panels);
+
+        // search all solar panels for one which starts with the provided name 
+        for (int i = 0; i < panels.Count; i++) {
+            IMySolarPanel solarPanel = panels[i] as IMySolarPanel;
+            if (solarPanel != null && solarPanel.CustomName.StartsWith(Configuration.SolarPanelName)) {
+                solarPanels.Add(solarPanel);
+                break;
+            }
+        }
+
+        if (solarPanels.Count <= 0) throw new Exception(" InitializeSolarPanels(): failed to find solar panel with name \"" + Configuration.SolarPanelName + "\"");
     }
 
     void InitializeRotors(bool forced = false) {
@@ -300,56 +320,65 @@ class rev8 : Program {
 
         for (int i = 0; i < Configuration.RotorNames.Length; i++) {
             List<IMyMotorStator> axis = new List<IMyMotorStator>();
+            string name = Configuration.RotorNames[i];
             bool isGroup = i >= Configuration.RotorNames_IsGroup.Length? false : Configuration.RotorNames_IsGroup[i];
 
             if (isGroup) {
-                // get a list of all block groups 
-                List<IMyBlockGroup> groups = new List<IMyBlockGroup>();
-                GridTerminalSystem.GetBlockGroups(groups);
-                bool foundGroup = false;
-
-                // search all block groups for one that has the provided name as its own 
-                for (int j = 0; j < groups.Count; j++) {
-                    IMyBlockGroup group = groups[j];
-                    if (group.Name.Equals(Configuration.RotorNames[i])) {
-                        foundGroup = true;
-                        // add all rotors in that group 
-                        for (int k = 0; k < group.Blocks.Count; k++) {
-                            IMyMotorStator rotor = group.Blocks[k] as IMyMotorStator;
-                            if (rotor != null) {
-                                axis.Add(rotor);
-                                Utilities.ToggleOff(rotor);
-                            }
-                        }
-                        break;
-                    }
-                }
-
-                if (!foundGroup) throw new Exception(" InitializeRotors(): failed to find group with name \"" + Configuration.RotorNames[i] + "\"");
-                if (axis.Count <= 0) throw new Exception(" InitializeRotors(): failed to find any rotors in the group \"" + Configuration.RotorNames[i] + "\"");
+                InitializeRotorGroup(axis, name);
             } else {
-                IMyMotorStator rotor = GridTerminalSystem.GetBlockWithName(Configuration.RotorNames[i]) as IMyMotorStator;
-                if (rotor == null) {
-                    string message = " InitializeRotors(): failed to find rotor with name \"" + Configuration.RotorNames[i] + "\"";
-                    if (Configuration.RotorNames[i].Contains(",")) {
-                        message += "\n\nDid you want to write\nRotorNames = { [...]\"";
-                        string[] split = Configuration.RotorNames[i].Split(',');
-                        for (int k = 0; k < split.Length; k++) {
-                            message += split[k];
-                            if (k < split.Length - 1) message += "\", \"";
-                        }
-                        message += "\" [...] };\ninstead?";
-                    }
-                    throw new Exception(message);
-                }
-                axis.Add(rotor);
-                Utilities.ToggleOff(rotor);
+                InitializeRotor(axis, name);
             }
 
             rotors.Add(axis);
         }
 
         Echo("initialized rotors");
+    }
+
+    void InitializeRotorGroup(List<IMyMotorStator> axis, string groupName) {
+        // get a list of all block groups 
+        List<IMyBlockGroup> groups = new List<IMyBlockGroup>();
+        GridTerminalSystem.GetBlockGroups(groups);
+        bool foundGroup = false;
+
+        // search all block groups for one that has the provided name as its own 
+        for (int j = 0; j < groups.Count; j++) {
+            IMyBlockGroup group = groups[j];
+            if (group.Name.Equals(groupName)) {
+                foundGroup = true;
+                // add all rotors in that group 
+                for (int k = 0; k < group.Blocks.Count; k++) {
+                    IMyMotorStator rotor = group.Blocks[k] as IMyMotorStator;
+                    if (rotor != null) {
+                        axis.Add(rotor);
+                        Utilities.ToggleOff(rotor);
+                    }
+                }
+                break;
+            }
+        }
+
+        if (!foundGroup) throw new Exception(" InitializeRotors(): failed to find group with name \"" + groupName + "\"");
+        if (axis.Count <= 0) throw new Exception(" InitializeRotors(): failed to find any rotors in the group \"" + groupName + "\"");
+    }
+
+    void InitializeRotor(List<IMyMotorStator> axis, string rotorName) {
+        IMyMotorStator rotor = GridTerminalSystem.GetBlockWithName(rotorName) as IMyMotorStator;
+        if (rotor == null) {
+            string message = " InitializeRotor(): failed to find rotor with name \"" + rotorName + "\"";
+            if (rotorName.Contains(",")) {
+                message += "\n\nDid you want to write\nRotorNames = { [...]\"";
+                string[] split = rotorName.Split(',');
+                for (int k = 0; k < split.Length; k++) {
+                    message += split[k];
+                    if (k < split.Length - 1) message += "\", \"";
+                }
+                message += "\" [...] };\ninstead?";
+            }
+            throw new Exception(message);
+        }
+        axis.Add(rotor);
+        Utilities.ToggleOff(rotor);
     }
 
     void InitializeTimer(bool forced = false) {
@@ -362,13 +391,39 @@ class rev8 : Program {
         Echo("initialized timer");
     }
 
-    void Hibernate() {
+    void Idle() {
         for (int i = 0; i < rotors.Count; i++) {
             Utilities.ToggleOff(rotors[i]);
         }
         UpdateNames();
-        CurrentStatus = Status.HIBERNATING;
+        CurrentStatus = Status.IDLING;
         Utilities.Trigger(timer, Configuration.IdleDelay);
+    }
+
+    void Hibernate() {
+        bool idle = true;
+        float speed = GetRotorSpeed();
+        for (int i = 0; i < rotors.Count; i++) {
+            List<IMyMotorStator> axis = rotors[i];
+            for (int j = 0; j < axis.Count; j++) {
+                IMyMotorStator rotor = axis[j];
+                if (Utilities.ReachedLowerLimit(rotor) || Utilities.ReachedUpperLimit(rotor)) {
+                    Utilities.ToggleOff(rotor);
+                } else {
+                    float distanceFromUpperLimit = rotor.UpperLimit - rotor.Angle;
+                    float distanceFromLowerLimit = rotor.Angle - rotor.LowerLimit;
+
+                    Utilities.ToggleOn(rotor);
+                    if (distanceFromLowerLimit < distanceFromUpperLimit) Utilities.RotateTowards(rotor, Utilities.ToDegrees(rotor.UpperLimit), speed);
+                    else Utilities.RotateTowards(rotor, Utilities.ToDegrees(rotor.LowerLimit), speed);
+
+                    idle = false;
+                }
+            }
+        }
+        UpdateNames();
+        CurrentStatus = Status.HIBERNATING;
+        Utilities.Trigger(timer, idle ? Configuration.HibernationIdleDelay : Configuration.HibernationWorkDelay);
     }
 
     void UpdateNames() {
@@ -405,7 +460,7 @@ class rev8 : Program {
         }
     }
 
-    float GetAppropriateSpeed() {
+    float GetRotorSpeed() {
         float speed = Configuration.RotorSpeed;
         if (Configuration.Features.EnergySaver.Enabled && currentPower <= Configuration.Features.EnergySaver.PanicPowerOutput) {
             speed *= Configuration.Features.EnergySaver.PanicSpeedMultiplier;
@@ -452,13 +507,41 @@ class rev8 : Program {
         }
 
         public static void RotateTowards(IMyMotorStator rotor, float target, float speed) {
-            float angle;
-            if (!CurrentAngle(rotor, out angle)) return;
-            if (angle == target) SetSpeed(rotor, 0);
+            float angle = ToDegrees(rotor.Angle);
+            if (RotationEquals(angle, target)) SetSpeed(rotor, 0);
             float posrot = (target + 360 - angle) % 360;
             float negrot = (angle + 360 - target) % 360;
-            if (posrot < negrot) SetSpeed(rotor, speed);
-            else SetSpeed(rotor, -speed);
+            if (posrot < negrot) {
+                if (HasUpperLimit(rotor) && rotor.UpperLimit <= target) SetSpeed(rotor, -speed);
+                else SetSpeed(rotor, speed);
+            } else {
+                if (HasLowerLimit(rotor) && rotor.LowerLimit >= target) SetSpeed(rotor, speed);
+                else SetSpeed(rotor, -speed);
+            }
+        }
+
+        public static bool RotationEquals(float a, float b) {
+            return Math.Abs(a - b) <= Configuration.MaxAngleDeviation;
+        }
+
+        public static bool HasLowerLimit(IMyMotorStator rotor) {
+            return !float.IsInfinity(rotor.LowerLimit);
+        }
+
+        public static bool HasUpperLimit(IMyMotorStator rotor) {
+            return !float.IsInfinity(rotor.UpperLimit);
+        }
+
+        public static bool ReachedLowerLimit(IMyMotorStator rotor) {
+            return !HasLowerLimit(rotor) || (HasLowerLimit(rotor) && RotationEquals(ToDegrees(rotor.Angle), ToDegrees(rotor.LowerLimit)));
+        }
+
+        public static bool ReachedUpperLimit(IMyMotorStator rotor) {
+            return !HasUpperLimit(rotor) || (HasUpperLimit(rotor) && RotationEquals(ToDegrees(rotor.Angle), ToDegrees(rotor.UpperLimit)));
+        }
+
+        public static float ToDegrees(float radians) {
+            return (float)(radians / Math.PI) * 180;
         }
 
         public static bool MaxOutput(IMySolarPanel panel, out float power) {
@@ -475,6 +558,7 @@ class rev8 : Program {
                 else if (maxOutput.Contains(" kW")) factor = 1.0f;
                 else if (maxOutput.Contains(" MW")) factor = 1000.0f;
                 else if (maxOutput.Contains(" GW")) factor = 1000000.0f;
+                else if (maxOutput.Contains(" TW")) factor = 1000000000.0f;
                 else {
                     power = float.NaN;
                     return true;
@@ -498,17 +582,6 @@ class rev8 : Program {
                 else power = (power + maxOutput) / 2;
             }
             return true;
-        }
-
-        public static bool CurrentAngle(IMyMotorStator rotor, out float angle) {
-            angle = 0.0f;
-            int start = rotor.DetailedInfo.IndexOf(Configuration.Localization.CurrentAngle);
-            int end = rotor.DetailedInfo.IndexOf('°');
-            if (start < 0 || end < 0 || end < start) return false;
-            start += Configuration.Localization.CurrentAngle.Length;
-
-            string currentAngle = rotor.DetailedInfo.Substring(start, end - start);
-            return float.TryParse(System.Text.RegularExpressions.Regex.Replace(currentAngle, @"[^0-9.-]", ""), out angle);
         }
     }
 }

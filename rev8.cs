@@ -47,7 +47,7 @@ class rev8 : Program {
 
         // Name of the solar panel that should be used for optimization
         // The name has to be EXACTLY THE SAME as in the terminal overview. 
-        // Default: "Solar Panel (optimized)" 
+        // Default: "Solar Panel (SPAS)" 
         public const string SolarPanelName = "Solar Panel (SPAS)";
 
         // Determines if the name that was provided for SolarPanelName should be used as group name (true) or block name (false). 
@@ -57,18 +57,18 @@ class rev8 : Program {
 
         // Name of the timer block that should be used for looping
         // The name has to be EXACTLY THE SAME as in the terminal overview. 
-        // Default: "Loop Timer" 
+        // Default: "Timer Block (SPAS)" 
         public const string TimerName = "Timer Block (SPAS)";
 
         // Names of all rotors that are connected to the solar panels that should be optimized
         // Each name has to be EXACTLY THE SAME as the corresponding rotor's name in the terminal overview. 
-        // Default: { "Advanced Rotor" } 
+        // Default: { "Advanced Rotor (SPAS)" } 
         // Allowed values: comma-separated list of strings 
         public static readonly string[] RotorNames = { "Advanced Rotor (SPAS)" };
 
         // Determines for each element of RotorNames if the name provided should be used as group name (true) or block name (false). 
         // If this does not have the same amount of elements as RotorNames, each remaining element of RotorNames is treated as block, not as group.
-        // Default: { false } 
+        // Default: { } 
         // Allowed values: comma-separated list of true and false 
         public static readonly bool[] RotorNames_IsGroup = {};
 

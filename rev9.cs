@@ -6,6 +6,7 @@ using Sandbox.ModAPI.Interfaces;
 using VRage;
 using VRageMath;
 
+
 class rev9 : Program {
 	// =================================[ START OF CONFIGURATION ]================================= 
 	static class Configuration {
@@ -24,26 +25,22 @@ class rev9 : Program {
 		// Recommended values: 2.5f - 10.0f 
 		public const float IdleDelay = 10.0f;
 
-		// Delay between executions while aligning in hibernation mode (in seconds)
-		// Default: 1.5f
-		// Recommended values: 1.5f - 5f;
-		public const float HibernationWorkDelay = 1.5f;
-
-		// Delay between executions while idling in hibernation mode (in seconds)
-		// Default: 10.0f
-		// Recommended values: 2.5f - 10.0f
-		public const float HibernationIdleDelay = 10.0f;
-
 		// Maximum deviation when comparing angles (in degrees)
 		// Default: 1.0f;
 		// Recommended values: 0.0001f - 1.0f
 		public const float MaxAngleDeviation = 1.0f;
 
-		// Speed of all rotors that are used to align the solar panels (in RPM)
+		// Maximum speed of all rotors that are used to align the solar panels (in RPM)
 		// Lower values mean higher accuracy but also higher alignment time. 
-		// Default: 0.1f 
-		// Recommended values: 0.05f - 0.5f 
-		public const float RotorSpeed = 0.1f;
+		// Default: 0.5f 
+		// Recommended values: 0.05f - 0.75f
+		public const float MaxRotorSpeed = 0.5f;
+
+		// Minimum speed of all rotors that are used to align the solar panels (in RPM)
+		// Lower values mean higher accuracy but also higher alignment time.
+		// Default: 0.05f
+		// Recommended values: 0.05f - 0.75f
+		public const float MinRotorSpeed = 0.05f;
 
 		// Name of the solar panel that should be used for optimization
 		// The name has to be EXACTLY THE SAME as in the terminal overview. 
@@ -86,19 +83,19 @@ class rev9 : Program {
 				public const bool Enabled = true;
 
 				// Maximum power output at which the script will stay in idle mode (in kW). 
-				// Default (Vanilla): 20 for large ship/station, 5 for small ship 
-				// Allowed values: 0 - 999999999 
-				public const int HibernatePowerOutput = 20;
+				// Default (Vanilla): 20.0f for large ship/station, 5.0f for small ship 
+				// Allowed values: 0.0f - 999999999.9f
+				public const float HibernatePowerOutput = 20.0f;
 
-				// Maximum power output at which the rotors will be accelerated by the panic speed multiplier (in kW). 
-				// Default (Vanilla): 60 for large ship/station, 15 for small ship 
-				// Allowed values: 0 - 999999999 
-				public const int PanicPowerOutput = 60;
+				// Delay between executions while aligning in hibernation mode (in seconds)
+				// Default: 1.5f
+				// Recommended values: 1.5f - 5f;
+				public const float HibernationWorkDelay = 1.5f;
 
-				// Value by which the default rotor speed will be multiplied while in panic mode.
-				// Default: 2.0f 
-				// Recommended values: 1.0f - 5.0f 
-				public const float PanicSpeedMultiplier = 2.0f;
+				// Delay between executions while idling in hibernation mode (in seconds)
+				// Default: 10.0f
+				// Recommended values: 2.5f - 10.0f
+				public const float HibernationIdleDelay = 10.0f;
 			}
 
 			public static class MaintenanceMode {
@@ -143,18 +140,6 @@ class rev9 : Program {
 
 	static class Status { public const int HIBERNATING = -1, IDLING = 0, UPDATING = 1, TESTING = 2, ALIGNING = 3; }
 
-	int CurrentStatus {
-		get { return currentStatus; }
-		set {
-			if (value == Status.HIBERNATING) Utilities.Echo("Hibernating...");
-			else if (value == Status.IDLING) Utilities.Echo("Idling...");
-			else if (value == Status.UPDATING) Utilities.Echo("Updating...");
-			else if (value == Status.TESTING) Utilities.Echo("Testing...");
-			else if (value == Status.ALIGNING) Utilities.Echo("Aligning...");
-			currentStatus = value;
-		}
-	}
-
 	float currentPower = 0.0f;
 	int currentRotorIndex = 0;
 	int currentDirection = 1;
@@ -167,7 +152,11 @@ class rev9 : Program {
 	static List<string> messages = new List<string>();
 
 	void Main(string argument) {
-		Utilities.Initialize(Me, Echo);
+		Utilities.Me = Me;
+		Utilities.Console = Echo;
+		Utilities.UpdateText = UpdateText;
+
+		InitializeLCDPanel();
 
 		if (Configuration.Features.MaintenanceMode.Enabled && (argument + " ").Contains("maintenance ")) {
 			if (Me.CustomName.EndsWith(Configuration.Features.MaintenanceMode.MaintenanceSuffix)) {
@@ -181,77 +170,71 @@ class rev9 : Program {
 			} else {
 				Me.SetCustomName(Me.CustomName + Configuration.Features.MaintenanceMode.MaintenanceSuffix);
 				Utilities.Echo("This programmable block is now in maintenance mode.");
-				UpdateText();
-				return;
 			}
+			return;
 		} else {
 			InitializeSolarPanels();
 			InitializeRotors();
 			InitializeTimer();
-			InitializeLCDPanel();
 		}
 
 		if (Me.CustomName.EndsWith(Configuration.Features.MaintenanceMode.MaintenanceSuffix)) {
 			Utilities.Echo("MAINTENANCE MODE");
 			Utilities.Trigger(timer, Configuration.Features.MaintenanceMode.MaintenanceDelay);
-			UpdateText();
 			return;
 		}
+
+		float oldPower = currentPower;
 
 		if (!Utilities.AverageMaxOutput(solarPanels, out currentPower)) throw new Exception(" Main(): failed to read average maximum power from solar panels\n\nDid you configure this script correctly?");
 		if (currentPower == float.NaN) throw new Exception(" Main(): failed to read average maximum power from solar panels - power output too high (>= 1 PW)");
 
-		Utilities.Echo("current average output: " + currentPower + " kW");
+		Utilities.Echo("dP = " + Math.Round(currentPower - oldPower, 2) + "kW");
 
 		if (Configuration.Features.EnergySaver.Enabled) {
-			if (currentPower <= Configuration.Features.EnergySaver.HibernatePowerOutput && CurrentStatus != Status.TESTING) {
+			if (currentPower <= Configuration.Features.EnergySaver.HibernatePowerOutput && currentStatus != Status.TESTING) {
 				Hibernate();
-				UpdateText();
 				return;
 			}
 		}
 
 		if (currentPower >= Configuration.TargetAveragePowerOutput) {
 			Idle();
-			UpdateText();
 			return;
 		}
 
-		if (CurrentStatus == Status.UPDATING || CurrentStatus == Status.IDLING || CurrentStatus == Status.HIBERNATING) {
+		if (currentStatus == Status.UPDATING || currentStatus == Status.IDLING || currentStatus == Status.HIBERNATING) {
 			currentRotors = rotors[currentRotorIndex];
 			UpdateNames();
 			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
 			Utilities.ToggleOn(currentRotors);
-			CurrentStatus = Status.TESTING;
+			currentStatus = Status.TESTING;
 			Utilities.Trigger(timer, Configuration.WorkDelay);
-			UpdateText();
 			return;
 		}
 
-		if (CurrentStatus == Status.TESTING) {
+		if (currentStatus == Status.TESTING) {
 			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
 			Utilities.ToggleOff(currentRotors);
 
-			float oldPower;
 			UpdateNames(out oldPower);
 			if (currentPower < oldPower) {
 				currentDirection = -currentDirection;
 				Utilities.SetSpeed(currentRotors, GetRotorSpeed());
 			}
 
-			CurrentStatus = Status.ALIGNING;
+			currentStatus = Status.ALIGNING;
 		}
 
-		if (CurrentStatus == Status.ALIGNING) {
+		if (currentStatus == Status.ALIGNING) {
 			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
 			Utilities.ToggleOn(currentRotors);
 
-			float oldPower;
 			UpdateNames(out oldPower);
 			if (currentPower < oldPower) {
 				if (rotors.Count > 1) {
 					Utilities.ToggleOff(currentRotors);
-					CurrentStatus = Status.UPDATING;
+					currentStatus = Status.UPDATING;
 					currentRotorIndex = (currentRotorIndex + 1) % rotors.Count;
 				} else {
 					currentDirection = -currentDirection;
@@ -260,11 +243,8 @@ class rev9 : Program {
 			}
 
 			Utilities.Trigger(timer, Configuration.WorkDelay);
-			UpdateText();
 			return;
 		}
-
-		UpdateText();
 	}
 
 	void InitializeSolarPanels(bool forced = false) {
@@ -383,7 +363,6 @@ class rev9 : Program {
 	}
 
 	void InitializeLCDPanel(bool forced = false) {
-		Utilities.Echo("InitializeLCDPanel");
 		if (!Configuration.Features.LCDOutput.Enabled) return;
 		if (lcdPanel != null && !forced) return;
 
@@ -405,7 +384,7 @@ class rev9 : Program {
 	void Idle() {
 		for (int i = 0; i < rotors.Count; i++) Utilities.ToggleOff(rotors[i]);
 		UpdateNames();
-		CurrentStatus = Status.IDLING;
+		currentStatus = Status.IDLING;
 		Utilities.Trigger(timer, Configuration.IdleDelay);
 	}
 
@@ -430,15 +409,33 @@ class rev9 : Program {
 			}
 		}
 		UpdateNames();
-		CurrentStatus = Status.HIBERNATING;
-		Utilities.Trigger(timer, idle ? Configuration.HibernationIdleDelay : Configuration.HibernationWorkDelay);
+		currentStatus = Status.HIBERNATING;
+		Utilities.Trigger(timer, idle ? Configuration.Features.EnergySaver.HibernationIdleDelay : Configuration.Features.EnergySaver.HibernationWorkDelay);
 	}
 
 	void UpdateText() {
 		if (!Configuration.Features.LCDOutput.Enabled) return;
-		if (messages.Count <= 0) return;
-		if (messages.Count > Configuration.Features.LCDOutput.MaxRows) messages.RemoveRange(0, messages.Count - Configuration.Features.LCDOutput.MaxRows);
-		Utilities.Write(lcdPanel, messages);
+
+		List<string> info = new List<string>();
+		float current;
+		float max;
+		bool success = true;
+		success &= Utilities.TotalCurrentOutput(solarPanels, out current);
+		success &= Utilities.TotalMaxOutput(solarPanels, out max);
+		info.Add("Current output: " + (success ? current + "kW / " + max + " kW" : "ERROR"));
+		string status = "ERROR";
+		if (currentStatus == Status.TESTING) status = "Testing";
+		else if (currentStatus == Status.UPDATING) status = "Updating";
+		else if (currentStatus == Status.ALIGNING) status = "Aligning";
+		else if (currentStatus == Status.IDLING) status = "Idling";
+		else if (currentStatus == Status.HIBERNATING) status = "Hibernating";
+		info.Add("Current status: " + status);
+		info.Add("Current speed: " + Math.Round(GetRotorSpeed(), 2) + "RPM");
+		info.Add("");
+
+		if (messages.Count > Configuration.Features.LCDOutput.MaxRows - info.Count) messages.RemoveRange(0, messages.Count - (Configuration.Features.LCDOutput.MaxRows - info.Count));
+		info.AddRange(messages);
+		Utilities.Write(lcdPanel, info);
 	}
 
 	void UpdateNames() {
@@ -474,17 +471,15 @@ class rev9 : Program {
 	}
 
 	float GetRotorSpeed() {
-		float speed = Configuration.RotorSpeed;
-		if (Configuration.Features.EnergySaver.Enabled && currentPower <= Configuration.Features.EnergySaver.PanicPowerOutput) {
-			speed *= Configuration.Features.EnergySaver.PanicSpeedMultiplier;
-			Utilities.Echo("Panicking...");
-		}
-		return speed * currentDirection;
+		float min = Configuration.Features.EnergySaver.Enabled ? Configuration.Features.EnergySaver.HibernatePowerOutput : 0;
+		float max = Configuration.TargetAveragePowerOutput - min;
+		return Utilities.EaseInOut(currentPower - min, Configuration.MaxRotorSpeed, Configuration.MinRotorSpeed - Configuration.MaxRotorSpeed, max * 1.1f) * currentDirection;
 	}
 
 	static class Utilities {
-		static IMyProgrammableBlock Me;
-		static Action<string> Console;
+		public static IMyProgrammableBlock Me;
+		public static Action<string> Console;
+		public static Action UpdateText;
 
 		public static float MaximumTorque {
 			get {
@@ -493,14 +488,10 @@ class rev9 : Program {
 			}
 		}
 
-		public static void Initialize(IMyProgrammableBlock me, Action<string> console) {
-			Me = me;
-			Console = console;
-		}
-
 		public static void Echo(string line) {
 			Console(line);
 			messages.Add(line);
+			UpdateText();
 		}
 
 		public static void ToggleOn(IMyFunctionalBlock block) { block.GetActionWithName("OnOff_On").Apply(block); }
@@ -520,6 +511,7 @@ class rev9 : Program {
 		}
 
 		public static void Trigger(IMyTimerBlock timer, float delay) {
+			UpdateText();
 			timer.SetValue("TriggerDelay", delay);
 			timer.GetActionWithName("Start").Apply(timer);
 		}
@@ -571,6 +563,15 @@ class rev9 : Program {
 
 		public static float ToDegrees(float radians) { return (float)(radians / Math.PI) * 180; }
 
+		static float GetFactor(string text) {
+			if (text.Contains(" W")) return 0.001f;
+			if (text.Contains(" kW")) return 1.0f;
+			if (text.Contains(" MW")) return 1000.0f;
+			if (text.Contains(" GW")) return 1000000.0f;
+			if (text.Contains(" TW")) return 1000000000.0f;
+			return float.NaN;
+		}
+
 		public static bool MaxOutput(IMySolarPanel panel, out float power) {
 			power = 0.0f;
 			int start = panel.DetailedInfo.IndexOf(Configuration.Localization.MaxOutput);
@@ -580,18 +581,23 @@ class rev9 : Program {
 
 			string maxOutput = panel.DetailedInfo.Substring(start, end - start);
 			if (float.TryParse(System.Text.RegularExpressions.Regex.Replace(maxOutput, @"[^0-9.]", ""), out power)) {
-				float factor = 0.0f;
-				if (maxOutput.Contains(" W")) factor = 0.001f;
-				else if (maxOutput.Contains(" kW")) factor = 1.0f;
-				else if (maxOutput.Contains(" MW")) factor = 1000.0f;
-				else if (maxOutput.Contains(" GW")) factor = 1000000.0f;
-				else if (maxOutput.Contains(" TW")) factor = 1000000000.0f;
-				else {
-					power = float.NaN;
-					return true;
-				}
+				power *= GetFactor(maxOutput);
+				return true;
+			}
 
-				power *= factor;
+			return false;
+		}
+
+		public static bool CurrentOutput(IMySolarPanel panel, out float power) {
+			power = 0.0f;
+			int start = panel.DetailedInfo.IndexOf(Configuration.Localization.CurrentOutput);
+			int end = panel.DetailedInfo.Length;
+			if (start < 0 || end < start) return false;
+			start += Configuration.Localization.CurrentOutput.Length;
+
+			string currentOutput = panel.DetailedInfo.Substring(start, end - start);
+			if (float.TryParse(System.Text.RegularExpressions.Regex.Replace(currentOutput, @"[^0-9.]", ""), out power)) {
+				power *= GetFactor(currentOutput);
 				return true;
 			}
 
@@ -611,20 +617,39 @@ class rev9 : Program {
 			return true;
 		}
 
+		public static bool TotalMaxOutput(List<IMySolarPanel> panels, out float power) {
+			power = 0.0f;
+			for (int i = 0; i < panels.Count; i++) {
+				float maxOutput;
+				IMySolarPanel panel = panels[i];
+				if (!MaxOutput(panel, out maxOutput)) return false;
+				power += maxOutput;
+			}
+			return true;
+		}
+
+		public static bool TotalCurrentOutput(List<IMySolarPanel> panels, out float power) {
+			power = 0.0f;
+			for (int i = 0; i < panels.Count; i++) {
+				float currentOutput;
+				IMySolarPanel panel = panels[i];
+				if (!CurrentOutput(panel, out currentOutput)) return false;
+				power += currentOutput;
+			}
+			return true;
+		}
+
 		public static float GetFontSize(IMyTextPanel panel) {
-			Utilities.Echo("Utilities.GetFontSize");
 			if (panel == null) return 0;
 			return panel.GetValueFloat("FontSize");
 		}
 
 		public static void SetFontSize(IMyTextPanel panel, float fontSize) {
-			Utilities.Echo("Utilities.SetFontSize");
 			if (panel == null) return;
-			panel.SetValue("FontSize", Math.Min(fontSize, 0.0f));
+			panel.SetValue("FontSize", Math.Max(fontSize, 0.0f));
 		}
 
 		public static void Write(IMyTextPanel panel, List<string> text) {
-			Utilities.Echo("Utilities.Write");
 			int width = 658;
 			int y = text.Count;
 			int x = 0;
@@ -651,6 +676,14 @@ class rev9 : Program {
 
 			panel.WritePublicText(sb.ToString());
 			panel.ShowPublicTextOnScreen();
+		}
+
+		// source: http://gizma.com/easing/
+		public static float EaseInOut(float t, float s, float c, float d) {
+			t /= d / 2;
+			if (t < 1) return c / 2 * t * t + s;
+			t--;
+			return -c / 2 * (t * (t - 2) - 1) + s;
 		}
 	}
 }

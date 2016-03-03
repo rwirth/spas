@@ -141,6 +141,7 @@ class rev9 : Program {
 	static class Status { public const int HIBERNATING = -1, IDLING = 0, UPDATING = 1, TESTING = 2, ALIGNING = 3; }
 
 	float currentPower = 0.0f;
+	float currentDifference = 0.0f;
 	int currentRotorIndex = 0;
 	int currentDirection = 1;
 	int currentStatus = Status.UPDATING;
@@ -185,66 +186,14 @@ class rev9 : Program {
 		}
 
 		float oldPower = currentPower;
+		float oldDifference = currentDifference;
+		currentPower = Utilities.AverageMaxOutput(solarPanels);
+		currentDifference = (float)Math.Round(currentPower - oldPower, 1);
 
-		if (!Utilities.AverageMaxOutput(solarPanels, out currentPower)) throw new Exception(" Main(): failed to read average maximum power from solar panels\n\nDid you configure this script correctly?");
-		if (currentPower == float.NaN) throw new Exception(" Main(): failed to read average maximum power from solar panels - power output too high (>= 1 PW)");
+		Utilities.Echo("dP = " + currentDifference + "kW");
+		Utilities.Echo("ddP = " + Math.Round(currentDifference - oldDifference, 2) + "kW");
 
-		Utilities.Echo("dP = " + Math.Round(currentPower - oldPower, 2) + "kW");
-
-		if (Configuration.Features.EnergySaver.Enabled) {
-			if (currentPower <= Configuration.Features.EnergySaver.HibernatePowerOutput && currentStatus != Status.TESTING) {
-				Hibernate();
-				return;
-			}
-		}
-
-		if (currentPower >= Configuration.TargetAveragePowerOutput) {
-			Idle();
-			return;
-		}
-
-		if (currentStatus == Status.UPDATING || currentStatus == Status.IDLING || currentStatus == Status.HIBERNATING) {
-			currentRotors = rotors[currentRotorIndex];
-			UpdateNames();
-			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
-			Utilities.ToggleOn(currentRotors);
-			currentStatus = Status.TESTING;
-			Utilities.Trigger(timer, Configuration.WorkDelay);
-			return;
-		}
-
-		if (currentStatus == Status.TESTING) {
-			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
-			Utilities.ToggleOff(currentRotors);
-
-			UpdateNames(out oldPower);
-			if (currentPower < oldPower) {
-				currentDirection = -currentDirection;
-				Utilities.SetSpeed(currentRotors, GetRotorSpeed());
-			}
-
-			currentStatus = Status.ALIGNING;
-		}
-
-		if (currentStatus == Status.ALIGNING) {
-			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
-			Utilities.ToggleOn(currentRotors);
-
-			UpdateNames(out oldPower);
-			if (currentPower < oldPower) {
-				if (rotors.Count > 1) {
-					Utilities.ToggleOff(currentRotors);
-					currentStatus = Status.UPDATING;
-					currentRotorIndex = (currentRotorIndex + 1) % rotors.Count;
-				} else {
-					currentDirection = -currentDirection;
-					Utilities.SetSpeed(currentRotors, GetRotorSpeed());
-				}
-			}
-
-			Utilities.Trigger(timer, Configuration.WorkDelay);
-			return;
-		}
+		Work(oldPower, oldDifference);
 	}
 
 	void InitializeSolarPanels(bool forced = false) {
@@ -381,6 +330,63 @@ class rev9 : Program {
 		Utilities.Echo("initialized LCD panel");
 	}
 
+	void Work(float oldPower, float oldDifference) {
+		if (Configuration.Features.EnergySaver.Enabled) {
+			if (currentPower <= Configuration.Features.EnergySaver.HibernatePowerOutput && currentStatus != Status.TESTING) {
+				Hibernate();
+				return;
+			}
+		}
+
+		if (currentPower >= Configuration.TargetAveragePowerOutput) {
+			Idle();
+			return;
+		}
+
+		if (currentStatus == Status.UPDATING || currentStatus == Status.IDLING || currentStatus == Status.HIBERNATING) {
+			currentRotors = rotors[currentRotorIndex];
+			UpdateNames();
+			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
+			Utilities.ToggleOn(currentRotors);
+			currentStatus = Status.TESTING;
+			Utilities.Trigger(timer, Configuration.WorkDelay);
+			return;
+		}
+
+		if (currentStatus == Status.TESTING) {
+			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
+			Utilities.ToggleOff(currentRotors);
+
+			UpdateNames(out oldPower);
+			if (currentPower < oldPower) {
+				currentDirection = -currentDirection;
+				Utilities.SetSpeed(currentRotors, GetRotorSpeed());
+			}
+
+			currentStatus = Status.ALIGNING;
+		}
+
+		if (currentStatus == Status.ALIGNING) {
+			Utilities.SetSpeed(currentRotors, GetRotorSpeed());
+			Utilities.ToggleOn(currentRotors);
+
+			UpdateNames(out oldPower);
+			if (currentPower < oldPower) {
+				if (rotors.Count > 1) {
+					Utilities.ToggleOff(currentRotors);
+					currentStatus = Status.UPDATING;
+					currentRotorIndex = (currentRotorIndex + 1) % rotors.Count;
+				} else {
+					currentDirection = -currentDirection;
+					Utilities.SetSpeed(currentRotors, GetRotorSpeed());
+				}
+			}
+
+			Utilities.Trigger(timer, Configuration.WorkDelay);
+			return;
+		}
+	}
+
 	void Idle() {
 		for (int i = 0; i < rotors.Count; i++) Utilities.ToggleOff(rotors[i]);
 		UpdateNames();
@@ -417,12 +423,10 @@ class rev9 : Program {
 		if (!Configuration.Features.LCDOutput.Enabled) return;
 
 		List<string> info = new List<string>();
-		float current;
-		float max;
-		bool success = true;
-		success &= Utilities.TotalCurrentOutput(solarPanels, out current);
-		success &= Utilities.TotalMaxOutput(solarPanels, out max);
-		info.Add("Current output: " + (success ? current + "kW / " + max + " kW" : "ERROR"));
+		double current = Math.Round(Utilities.TotalCurrentOutput(solarPanels), 2);
+		double max = Math.Round(Utilities.TotalMaxOutput(solarPanels), 2);
+		info.Add("Current output: " + current + "kW / " + max + " kW");
+
 		string status = "ERROR";
 		if (currentStatus == Status.TESTING) status = "Testing";
 		else if (currentStatus == Status.UPDATING) status = "Updating";
@@ -448,9 +452,7 @@ class rev9 : Program {
 		for (int i = 0; i < solarPanels.Count; i++) {
 			IMySolarPanel panel = solarPanels[i];
 
-			float panelOutput;
-			if (!Utilities.MaxOutput(panel, out panelOutput)) continue;
-
+			float panelOutput = Utilities.MaxOutput(panel);
 			string[] split = panel.CustomName.Split('~');
 			if (split.Length <= 1) {
 				panel.SetCustomName(panel.CustomName + "~" + panelOutput);
@@ -563,80 +565,44 @@ class rev9 : Program {
 
 		public static float ToDegrees(float radians) { return (float)(radians / Math.PI) * 180; }
 
-		static float GetFactor(string text) {
-			if (text.Contains(" W")) return 0.001f;
-			if (text.Contains(" kW")) return 1.0f;
-			if (text.Contains(" MW")) return 1000.0f;
-			if (text.Contains(" GW")) return 1000000.0f;
-			if (text.Contains(" TW")) return 1000000000.0f;
-			return float.NaN;
+		public static float MaxOutput(IMySolarPanel panel) {
+			float power = panel.MaxOutput;
+			return power * 1000;
 		}
 
-		public static bool MaxOutput(IMySolarPanel panel, out float power) {
-			power = 0.0f;
-			int start = panel.DetailedInfo.IndexOf(Configuration.Localization.MaxOutput);
-			int end = panel.DetailedInfo.IndexOf(Configuration.Localization.CurrentOutput);
-			if (start < 0 || end < 0 || end < start) return false;
-			start += Configuration.Localization.MaxOutput.Length;
-
-			string maxOutput = panel.DetailedInfo.Substring(start, end - start);
-			if (float.TryParse(System.Text.RegularExpressions.Regex.Replace(maxOutput, @"[^0-9.]", ""), out power)) {
-				power *= GetFactor(maxOutput);
-				return true;
-			}
-
-			return false;
+		public static float CurrentOutput(IMySolarPanel panel) {
+			float power = panel.CurrentOutput;
+			return power * 1000;
 		}
 
-		public static bool CurrentOutput(IMySolarPanel panel, out float power) {
-			power = 0.0f;
-			int start = panel.DetailedInfo.IndexOf(Configuration.Localization.CurrentOutput);
-			int end = panel.DetailedInfo.Length;
-			if (start < 0 || end < start) return false;
-			start += Configuration.Localization.CurrentOutput.Length;
-
-			string currentOutput = panel.DetailedInfo.Substring(start, end - start);
-			if (float.TryParse(System.Text.RegularExpressions.Regex.Replace(currentOutput, @"[^0-9.]", ""), out power)) {
-				power *= GetFactor(currentOutput);
-				return true;
-			}
-
-			return false;
-		}
-
-		public static bool AverageMaxOutput(List<IMySolarPanel> panels, out float power) {
-			power = 0.0f;
+		public static float AverageMaxOutput(List<IMySolarPanel> panels) {
+			float power = 0.0f;
 			for (int i = 0; i < panels.Count; i++) {
-				float maxOutput;
 				IMySolarPanel panel = panels[i];
-				if (!MaxOutput(panel, out maxOutput)) return false;
 
+				float maxOutput = MaxOutput(panel);
 				if (power == 0) power = maxOutput;
 				else power = (power + maxOutput) / 2;
 			}
-			return true;
+			return power;
 		}
 
-		public static bool TotalMaxOutput(List<IMySolarPanel> panels, out float power) {
-			power = 0.0f;
+		public static float TotalMaxOutput(List<IMySolarPanel> panels) {
+			float power = 0.0f;
 			for (int i = 0; i < panels.Count; i++) {
-				float maxOutput;
 				IMySolarPanel panel = panels[i];
-				if (!MaxOutput(panel, out maxOutput)) return false;
-				power += maxOutput;
+				power += MaxOutput(panel);
 			}
-			return true;
+			return power;
 		}
 
-		public static bool TotalCurrentOutput(List<IMySolarPanel> panels, out float power) {
-			power = 0.0f;
+		public static float TotalCurrentOutput(List<IMySolarPanel> panels) {
+			float power = 0.0f;
 			for (int i = 0; i < panels.Count; i++) {
-				float currentOutput;
 				IMySolarPanel panel = panels[i];
-				if (!CurrentOutput(panel, out currentOutput)) return false;
-				power += currentOutput;
+				power += CurrentOutput(panel);
 			}
-			return true;
+			return power;
 		}
 
 		public static float GetFontSize(IMyTextPanel panel) {

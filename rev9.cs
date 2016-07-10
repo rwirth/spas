@@ -207,13 +207,15 @@ class rev9 : Program {
 
 	void InitializeSolarPanelGroup() {
 		List<IMyBlockGroup> groups = new List<IMyBlockGroup>();
+		List<IMyTerminalBlock> blocks = new List<IMyTerminalBlock>();
 		GridTerminalSystem.GetBlockGroups(groups);
 
 		for (int i = 0; i < groups.Count; i++) {
 			IMyBlockGroup group = groups[i];
 			if (group.Name.Equals(Configuration.SolarPanelName)) {
-				for (int j = 0; j < group.Blocks.Count; j++) {
-					IMySolarPanel solarPanel = group.Blocks[j] as IMySolarPanel;
+				group.GetBlocks(blocks);
+				for (int j = 0; j < blocks.Count; j++) {
+					IMySolarPanel solarPanel = blocks[j] as IMySolarPanel;
 					if (solarPanel != null) solarPanels.Add(solarPanel);
 				}
 				break;
@@ -257,6 +259,7 @@ class rev9 : Program {
 
 	void InitializeRotorGroup(List<IMyMotorStator> axis, string groupName) {
 		List<IMyBlockGroup> groups = new List<IMyBlockGroup>();
+		List<IMyTerminalBlock> blocks = new List<IMyTerminalBlock>();
 		GridTerminalSystem.GetBlockGroups(groups);
 		bool foundGroup = false;
 
@@ -264,8 +267,9 @@ class rev9 : Program {
 			IMyBlockGroup group = groups[j];
 			if (group.Name.Equals(groupName)) {
 				foundGroup = true;
-				for (int k = 0; k < group.Blocks.Count; k++) {
-					IMyMotorStator rotor = group.Blocks[k] as IMyMotorStator;
+				group.GetBlocks(blocks);
+				for (int k = 0; k < blocks.Count; k++) {
+					IMyMotorStator rotor = blocks[k] as IMyMotorStator;
 					if (rotor != null) {
 						axis.Add(rotor);
 						Utilities.ToggleOff(rotor);

@@ -212,10 +212,9 @@ class rev9 : Program {
 		for (int i = 0; i < groups.Count; i++) {
 			IMyBlockGroup group = groups[i];
 			if (group.Name.Equals(Configuration.SolarPanelName)) {
-				for (int j = 0; j < group.Blocks.Count; j++) {
-					IMySolarPanel solarPanel = group.Blocks[j] as IMySolarPanel;
-					if (solarPanel != null) solarPanels.Add(solarPanel);
-				}
+				List<IMySolarPanel> panels = new List<IMySolarPanel>();
+				group.GetBlocksOfType(panels);
+				solarPanels.AddRange(panels);
 				break;
 			}
 		}
@@ -264,14 +263,16 @@ class rev9 : Program {
 			IMyBlockGroup group = groups[j];
 			if (group.Name.Equals(groupName)) {
 				foundGroup = true;
-				for (int k = 0; k < group.Blocks.Count; k++) {
-					IMyMotorStator rotor = group.Blocks[k] as IMyMotorStator;
-					if (rotor != null) {
-						axis.Add(rotor);
-						Utilities.ToggleOff(rotor);
-						Utilities.SetTorque(rotor, Utilities.MaximumTorque);
-						Utilities.SetBrakingTorque(rotor, Utilities.MaximumTorque);
-					}
+
+				List<IMyMotorStator> rotors = new List<IMyMotorStator>();
+				group.GetBlocksOfType(rotors);
+
+				for (int k = 0; k < rotors.Count; k++) {
+					IMyMotorStator rotor = rotors[k];
+					axis.Add(rotor);
+					Utilities.ToggleOff(rotor);
+					Utilities.SetTorque(rotor, Utilities.MaximumTorque);
+					Utilities.SetBrakingTorque(rotor, Utilities.MaximumTorque);
 				}
 				break;
 			}
@@ -485,7 +486,8 @@ class rev9 : Program {
 
 		public static float MaximumTorque {
 			get {
-				if (Me.CubeGrid.GridSizeEnum == VRage.Game.MyCubeSize.Large) return 33600000;
+				// 0 is large grid, MyCubeSize.Large is not accessible for some reason
+				if (Me.CubeGrid.GridSizeEnum == 0) return 33600000;
 				return 448000;
 			}
 		}

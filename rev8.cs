@@ -284,9 +284,9 @@ class rev8 : Program {
             IMyBlockGroup group = groups[i];
             if (group.Name.Equals(Configuration.SolarPanelName)) {
                 // add all solar panels in that group 
-				List<IMySolarPanel> panels = new List<IMySolarPanel>();
-				group.GetBlocksOfType(panels);
-				solarPanels.AddRange(panels);
+                List<IMySolarPanel> panels = new List<IMySolarPanel>();
+                group.GetBlocksOfType(panels);
+                solarPanels.AddRange(panels);
                 break;
             }
         }
@@ -344,11 +344,11 @@ class rev8 : Program {
             if (group.Name.Equals(groupName)) {
                 foundGroup = true;
                 // add all rotors in that group 
-				List<IMyMotorStator> rotors = new List<IMyMotorStator>();
-				group.GetBlocksOfType(rotors);
+                List<IMyMotorStator> rotors = new List<IMyMotorStator>();
+                group.GetBlocksOfType(rotors);
 
-				for (int k = 0; k < rotors.Count; k++) {
-					IMyMotorStator rotor = rotors[k];
+                for (int k = 0; k < rotors.Count; k++) {
+                    IMyMotorStator rotor = rotors[k];
                     if (rotor != null) {
                         axis.Add(rotor);
                         Utilities.ToggleOff(rotor);
